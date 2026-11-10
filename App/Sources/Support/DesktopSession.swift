@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import CoreVideo
+import os
 
 /// MacDroid 데스크톱 세션 — 스트림 1개, 가상 디스플레이 1개, 그 위의 앱 창들을 우리 데스크톱 창으로 관리한다.
 /* 정책:
@@ -86,6 +87,10 @@ final class DesktopSession {
     private var windowifiedTasks: Set<Int> = []
     /// 이전 폴링 때 맨 앞이던 창 id — 폰에서 기존 앱을 전면으로 올렸는지 판별용.
     private var lastFrontWindowID: Int?
+    /// 이전 폴링 때의 디스플레이 전체 창(최소화 포함) — 태스크가 폰으로 이동·사라졌는지 판별용.
+    private var lastRawWindows: [ADB.DesktopWindow] = []
+    /// 폰 실행 감지 진단 로그(Console.app, subsystem=MacDroid).
+    private static let phoneLog = Logger(subsystem: "kr.macdroid.MacDroid", category: "phone-launch")
     private var labels: [String: String] = [:]
     private var icons: [String: NSImage] = [:]
 
@@ -333,6 +338,50 @@ final class DesktopSession {
         let alive = Set(result.windows.map(\.id))
         minimized.removeAll { !alive.contains($0.id) && !hiding.contains($0.id) }
         await movePhoneLaunchedTaskToPhone()
+        await fullscreenPhoneMovedTasks(raw: result.windows)
+    }
+
+    /// 폰(디스플레이 0)으로 이동된 태스크를 진짜 전체화면으로 되살린다.
+    /* 변경 전 정책: '맨 앞 창 교체'만 폰 실행으로 봤다 — 삼성은 폰에서 앱을 열면 태스크를 통째로 폰
+         디스플레이로 '이동'시켜 버린다(데스크톱 목록에서는 소멸) → 감지가 아예 일어나지 않았고,
+         폰에는 freeform '최대화된 창'으로 떴다(대장님 재신고).
+       변경 후 정책: 태스크가 데스크톱에서 사라졌는데 폰 디스플레이(0)에 같은 패키지 태스크가 있으면
+         폰으로 이동된 것이다 — 그 태스크를 제거하고 --windowingMode 1(전체화면)로 재실행한다(실측:
+         삼성은 앱별 freeform을 기억해 재실행에 windowing 지정이 없으면 창모드로 다시 열린다).
+         Mac 입력 3초 이내의 닫기(hiding)는 제외한다.
+       영향 범위: 데스크톱 세션의 창 소멸 감지. 경로별 진단 로그를 남긴다(phone-launch 카테고리). */
+    private func fullscreenPhoneMovedTasks(raw: [ADB.DesktopWindow]) async {
+        let currentIDs = Set(raw.map(\.id))
+        let gone = lastRawWindows.filter { !currentIDs.contains($0.id) && !hiding.contains($0.id) }
+        lastRawWindows = raw
+        guard !gone.isEmpty else { return }
+        guard Date().timeIntervalSince(lastInteraction) > 3 else {
+            Self.phoneLog.notice("소멸 감지했으나 맥 입력 3초 내 — 제외 (\(gone.map(\.package), privacy: .public))")
+            return
+        }
+        guard let out = try? await ADB.shell(serial: serial, "cmd activity stack list") else { return }
+        let serial = self.serial
+        for task in gone {
+            // 폰 디스플레이(0) RootTask 아래에 같은 패키지 태스크가 있는지 — "RootTask id=N … displayId=0" 줄 뒤의 taskId 줄
+            var phoneTask: (id: String, component: String)?
+            var displayZero = false
+            for line in out.split(separator: "\n") {
+                if line.contains("RootTask id=") {
+                    displayZero = line.contains("displayId=0 ")
+                } else if displayZero, let eq = line.range(of: "taskId="),
+                          line.contains(" \(task.package)/"), let colon = line.firstIndex(of: ":") {
+                    let component = line[line.index(after: colon)...].split(separator: " ").first.map(String.init) ?? ""
+                    let idText = line[eq.upperBound...].prefix { $0.isNumber }
+                    guard !idText.isEmpty, component.contains("/") else { continue }
+                    phoneTask = (String(idText), component)
+                }
+            }
+            guard let found = phoneTask else { continue }
+            Self.phoneLog.notice("폰으로 이동 감지: \(task.package, privacy: .public) → 폰 태스크 \(found.id, privacy: .public) 전체화면 재실행")
+            _ = try? await ADB.shell(serial: serial, "cmd activity stack remove \(found.id)")
+            try? await Task.sleep(for: .milliseconds(600))
+            _ = try? await ADB.shell(serial: serial, "am start --windowingMode 1 -n \(found.component)")
+        }
     }
 
     /// 폰 본체에서 연 앱을 폰 화면으로 돌려보낸다.
@@ -354,6 +403,7 @@ final class DesktopSession {
         guard Date().timeIntervalSince(lastInteraction) > 3 else { return }
         if !phoneAwake { await refreshPhoneState() }
         guard phoneAwake else { return }
+        Self.phoneLog.notice("전면 교체 감지: \(front.package, privacy: .public) 폰 전체화면 재실행")
         let serial = self.serial
         let taskID = front.id
         let component = front.component

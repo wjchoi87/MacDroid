@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import os
 
 /// scrcpy 세션 정의.
 /// 정책: 세션 = 하나의 scrcpy 프로세스. 미러(실화면)와 DeX 앱 창(가상 디스플레이)은 같은 러너로 실행.
@@ -170,6 +171,9 @@ enum Scrcpy {
     /// 세션 실행. 종료 이벤트는 SessionEvents로 방출된다(AppState가 정리).
     /// - Returns: 실행된 프로세스 핸들(세션에 attach해서 종료 가능하게).
     static func launch(arguments: [String], sessionID: String) throws -> StreamingProcess {
+        // 미러/앱 창 실행 인자 진단 로그 — 커서·입력 문제 원인 확인용(Console.app, subsystem=MacDroid)
+        Logger(subsystem: "kr.macdroid.MacDroid", category: "scrcpy-launch")
+            .notice("scrcpy \(arguments.joined(separator: " "), privacy: .public)")
         let process = StreamingProcess()
         try process.start(
             executable: Binaries.scrcpy,
