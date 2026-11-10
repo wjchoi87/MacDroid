@@ -26,6 +26,8 @@ final class DesktopStream: @unchecked Sendable {
         let maxFPS: Int
         /// 한글 IME용 폰 화면 전원 끄기(scrcpy turn_screen_off) — 시스템은 깨어 있어 가상 디스플레이가 유지된다.
         let screenOff: Bool
+        /// true면 new_display 없이 폰 본체 화면(디스플레이 0)을 그대로 영상으로 받는다(미러).
+        var mirror: Bool = false
     }
 
     /// 서버가 만든 가상 디스플레이 id(앱 실행 대상).
@@ -118,16 +120,19 @@ final class DesktopStream: @unchecked Sendable {
         lock.withLock { forwardPort = port }
         if isStopped { return }
 
-        // 3) 서버 실행
+        // 3) 서버 실행 — 미러(mirror=true)는 new_display 없이 폰 본체 화면(디스플레이 0)을 그대로 받는다
         var params = [
             "scid=\(scid)", "log_level=info", "audio=false", "tunnel_forward=true",
             "video_codec=h264", "video_bit_rate=\(config.bitRateMbps * 1_000_000)",
-            "new_display=\(config.width)x\(config.height)/\(config.density)",
-            "flex_display=true", "vd_system_decorations=false",
-            // display_ime_policy=hide 제거(실측 원인 후보): 이 정책이 붙은 디스플레이에서는 IME가
-            // 조합 모드를 개시하지 않아 물리 키보드(uhid) 한글이 조합되지 않았다. IME 창이 데스크톱에
-            // 뜨는 부작용이 있지만 한글 입력이 우선 — 동작 확인 후 정책 재조정.
         ]
+        if !config.mirror {
+            params.append("new_display=\(config.width)x\(config.height)/\(config.density)")
+            params += ["flex_display=true", "vd_system_decorations=false",
+                // display_ime_policy=hide 제거(실측 원인 후보): 이 정책이 붙은 디스플레이에서는 IME가
+                // 조합 모드를 개시하지 않아 물리 키보드(uhid) 한글이 조합되지 않았다. IME 창이 데스크톱에
+                // 뜨는 부작용이 있지만 한글 입력이 우선 — 동작 확인 후 정책 재조정.
+            ]
+        }
         if config.maxFPS > 0 { params.append("max_fps=\(config.maxFPS)") }
         /* 변경 전 정책: 한글을 위해 폰을 잠글 때 input keyevent KEYCODE_SLEEP를 썼다 — 이 폰(One UI)에서는
              절전으로 넘어가며 가상 디스플레이까지 검게 꺼져 "폰 화면 끄면 데스크톱도 안 보임"이었다(대장님 신고).

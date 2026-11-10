@@ -13,7 +13,7 @@ final class DesktopVideoView: NSView, @preconcurrency NSTextInputClient {
     /// 입력 내용 자체는 찍지 않는다(개인정보) — 길이·ASCII 여부·분기만.
     static let log = Logger(subsystem: "kr.macdroid.MacDroid", category: "desktop-input")
 
-    weak var session: DesktopSession?
+    weak var session: (any VideoFeedSession)?
     var windowID = 0
     /// 이 창의 기기 화면 영역(px).
     var crop: CGRect = .zero {
@@ -337,7 +337,7 @@ final class DesktopVideoView: NSView, @preconcurrency NSTextInputClient {
 
 /// SwiftUI 래퍼.
 struct DesktopVideo: NSViewRepresentable {
-    let session: DesktopSession
+    let session: any VideoFeedSession
     let windowID: Int
     let crop: CGRect
 

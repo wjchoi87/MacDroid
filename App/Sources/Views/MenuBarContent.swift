@@ -14,7 +14,7 @@ struct MenuBarContent: View {
                 Button {
                     openWindow(id: "main")
                     NSApp.activate(ignoringOtherApps: true)
-                    appState.launchMirror(for: device)
+                    openWindow(id: "mirror", value: device.serial)
                 } label: {
                     Label("\(device.displayModel) 미러링", systemImage: "rectangle.on.rectangle")
                 }

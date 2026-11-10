@@ -368,28 +368,10 @@ final class AppState {
 
     // MARK: 세션 실행
 
-    /// 실화면 미러. 이미 떠 있는 미러가 있으면 먼저 종료(이중 미러 금지 정책).
-    func launchMirror(for device: Device) {
-        let existing = sessions.first { $0.deviceSerial == device.serial && $0.mode == .mirror }
-        existing?.terminate()
-
-        var session = ScrcpySession(
-            id: Scrcpy.makeID(serial: device.serial, mode: .mirror, package: nil),
-            deviceSerial: device.serial,
-            mode: .mirror,
-            title: String(localized: "MacDroid · \(device.displayModel) 미러링")
-        )
-        let args = Scrcpy.mirrorArguments(device: device, settings: settings, audioAllowed: true)
-        beginStayAwakeIfNeeded(serial: device.serial)
-        do {
-            let process = try Scrcpy.launch(arguments: args, sessionID: session.key)
-            session.attach(process)
-            sessions.removeAll { $0.id == session.id }
-            sessions.append(session)
-        } catch {
-            lastError = String(localized: "미러링 시작 실패: \(error.localizedDescription)")
-        }
-    }
+    /* 변경 전 정책: 실화면 미러는 외부 scrcpy 클라이언트를 띄워 별도 앱 창으로 보여 줬다 — "다른 앱이
+         또 실행되는 느낌"(대장님)에 세션 목록·stay_on 관리도 이중이었다.
+       변경 후 정책: 미러는 자체 창(WindowGroup "mirror" + MirrorSession/DesktopStream mirror 모드)으로
+         떠서 이 경로는 삭제한다. stay_on은 MirrorSession이 스스로 관리한다. */
 
     // MARK: 데스크톱
 

@@ -41,6 +41,18 @@ struct MacDroidApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1440, height: 900)
 
+        // 폰 본체 화면 미러 — 기기 시리얼을 값으로 갖는 윈도우(자체 렌더링, 외부 scrcpy 창 아님)
+        WindowGroup(id: "mirror", for: String.self) { $serial in
+            if let serial {
+                MirrorView(serial: serial)
+                    .environment(appState)
+            } else {
+                ContentUnavailableView("기기 없음", systemImage: "iphone.slash",
+                                       description: Text("연결된 기기를 선택하세요."))
+            }
+        }
+        .defaultSize(width: 430, height: 880)
+
         Settings {
             SettingsView()
                 .environment(appState)

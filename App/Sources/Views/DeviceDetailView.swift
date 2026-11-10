@@ -124,7 +124,7 @@ struct DeviceDetailView: View {
             GridRow {
                 ActionButton(title: String(localized: "화면 미러링"), icon: "rectangle.on.rectangle",
                              prominent: device.state == .online) {
-                    appState.launchMirror(for: device)
+                    openWindow(id: "mirror", value: device.serial)
                 }
                 /* 정책: DeX 데스크톱 = MacDroid가 그리는 데스크톱 창 하나(배경화면·상태표시줄·독·내비바).
                    앱은 그 안의 창으로 열린다(앱 런처·독 어디서 열어도 같은 데스크톱). */

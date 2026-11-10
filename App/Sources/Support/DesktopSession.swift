@@ -1233,6 +1233,20 @@ final class DesktopSession {
 
 // MARK: - 프레임 배포
 
+/// DesktopVideoView가 필요로 하는 세션 능력 — 데스크톱 세션과 미러 세션이 함께 채택한다.
+@MainActor
+protocol VideoFeedSession: AnyObject {
+    var frames: FrameHub { get }
+    var input: DesktopStream? { get }
+    func nudgeAwake()
+    func markKeyboardUsed()
+    func back()
+    func back(windowID: Int)
+    func raiseLocally(_ id: Int)
+}
+
+extension DesktopSession: VideoFeedSession {}
+
 /// 디코드된 프레임(IOSurface)을 창마다 있는 잘라 그리기 뷰에 나눠 준다 — SwiftUI 상태를 거치지 않는다(60fps).
 @MainActor
 final class FrameHub {
