@@ -95,6 +95,95 @@ struct AndroidApp: Identifiable, Hashable, Sendable {
     }
 }
 
+// MARK: - 연결했던 기기 저장
+
+/// 한번 연결된 기기의 스냅샷 — 사이드바 '최근 기기' 목록과 원클릭 재연결에 쓴다.
+/* 변경 전 정책: 무선 재접속용 ip:port 목록(wirelessHostsKey)만 저장했다 — 포트가 바뀌어
+   refused가 오면 삭제됐고, 기기 이름·USB 이력은 남지 않아 "한번 연결했던 폰"이 UI에 없었다.
+   변경 후 정책: 기기 단위(ro.serialno 기준)로 모델명·마지막 무선 주소·마지막 연결 시각을 저장한다.
+   변경 이유: 재스캔/재입력 없이 최근 기기를 한 번에 다시 연결하기 위함.
+   영향 범위: 기기가 online으로 확인될 때마다 갱신, 사이드바 최근 기기 섹션. */
+struct SavedDevice: Codable, Identifiable, Equatable, Sendable {
+    /// 기기 고유 id — ro.serialno(전송 무관) 우선, 못 얻으면 마지막 adb serial.
+    let id: String
+    var model: String?
+    var brand: String?
+    var androidVersion: String?
+    /// 마지막 무선 연결 주소(ip:port) — 원클릭 재연결 대상. USB/mDNS 전송이면 nil.
+    var lastHost: String?
+    /// 마지막으로 본 adb serial(USB 시리얼 또는 ip:port) — 현재 연결 여부 판별용.
+    var lastSerial: String
+    var wasWireless: Bool
+    var lastConnectedAt: Date
+
+    var displayModel: String { model ?? lastSerial }
+
+    /// 행 부제목 — 마지막 주소(무선) 또는 USB 안내.
+    var subtitle: String {
+        if let lastHost { return lastHost }
+        return String(localized: "USB · 케이블을 연결하면 자동 인식")
+    }
+}
+
+/// 연결했던 기기 저장소(UserDefaults Codable 배열) — 저장·병합·삭제만 담당.
+enum SavedDeviceStore {
+    private static let key = "MacDroid.savedDevices"
+    /// 최근 기기 상한 — 무선 자동 재접속 목록(wirelessHostsKey)의 8개와 같은 취지.
+    private static let limit = 10
+
+    static func load() -> [SavedDevice] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([SavedDevice].self, from: data) else { return [] }
+        return decoded.sorted { $0.lastConnectedAt > $1.lastConnectedAt }
+    }
+
+    private static func save(_ devices: [SavedDevice]) {
+        if let data = try? JSONEncoder().encode(devices) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+
+    /// 기기 스냅샷을 저장 목록에 반영(같은 기기 병합, 최근순, 상한 초과분 삭제).
+    /// id뿐 아니라 lastSerial(ip:port)이 같은 옛 기록도 함께 흡수한다 — 상세(serialNo) 채워지기 전에
+    /// ip:port를 id로 먼저 저장한 중복 기록을 막기 위함.
+    @discardableResult
+    static func upsert(device: Device) -> [SavedDevice] {
+        guard device.state == .online else { return load() }
+        let entry = SavedDevice(
+            id: device.serialNo ?? device.serial,
+            model: device.model,
+            brand: device.brand,
+            androidVersion: device.androidVersion,
+            // 무선 중에서도 ip:port 전송만 재연결 주소로 쓴다(mDNS 이름 전송은 adb connect 대상이 아니다)
+            lastHost: device.wirelessIP != nil ? device.serial : nil,
+            lastSerial: device.serial,
+            wasWireless: !device.isUSB,
+            lastConnectedAt: Date()
+        )
+        var devices = load()
+        // 이미 저장된 모델명/마지막 주소는 새 스냅샷이 비었을 때 유지(부분 실패 허용 정책)
+        var merged = entry
+        if let previous = devices.first(where: { $0.id == entry.id || $0.lastSerial == entry.lastSerial }) {
+            merged.model = merged.model ?? previous.model
+            merged.brand = merged.brand ?? previous.brand
+            merged.androidVersion = merged.androidVersion ?? previous.androidVersion
+            if entry.lastHost == nil { merged.lastHost = previous.lastHost }
+        }
+        devices.removeAll { $0.id == entry.id || $0.lastSerial == entry.lastSerial }
+        devices.insert(merged, at: 0)
+        if devices.count > limit { devices = Array(devices.prefix(limit)) }
+        save(devices)
+        return devices
+    }
+
+    static func remove(id: String) -> [SavedDevice] {
+        var devices = load()
+        devices.removeAll { $0.id == id }
+        save(devices)
+        return devices
+    }
+}
+
 // MARK: - mDNS 발견 서비스
 
 struct MdnsService: Identifiable, Equatable, Sendable {

@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import os
 
 /// MacDroid 데스크톱 — 우리만의 DeX 셸.
 /* 정책: 배경화면·상태표시줄(기기·연결·배터리·시계)·작업표시줄(내비 버튼·독)·앱 서랍·최근 창·바탕화면 아이콘은
@@ -25,6 +26,22 @@ struct DesktopView: View {
     }
 }
 
+// MARK: - 데스크톱 셸 레이아웃 진단(일시적 — 독/내비 미표시 원인 추적용)
+/* 임시 진단 로그: 캔버스 크기·창 좌표·화면 visibleFrame·세션 상태를 Console.app(subsystem=MacDroid)에 남긴다.
+   원인 파악 후 제거 예정. */
+enum DesktopShellLayoutLog {
+    static let log = Logger(subsystem: "kr.macdroid.MacDroid", category: "shell-layout")
+
+    static func report(_ tag: String, geometry: CGSize, phaseDesc: String, windows: Int) {
+        let frame = NSApp.windows.map { "\(Int($0.frame.width))x\(Int($0.frame.height))@\(Int($0.frame.minX)),\(Int($0.frame.minY))" }
+            .joined(separator: " | ")
+        let screens = NSScreen.screens.map {
+            "frame=\(Int($0.frame.minY)),\(Int($0.frame.height)) visible=\(Int($0.visibleFrame.minY))~\(Int($0.visibleFrame.maxY))"
+        }.joined(separator: " ; ")
+        log.notice("shell-\(tag, privacy: .public) canvas=\(Int(geometry.width), privacy: .public)x\(Int(geometry.height), privacy: .public) phase=\(phaseDesc, privacy: .public) windows=\(windows, privacy: .public) appWindows=[\(frame, privacy: .public)] screens[\(screens, privacy: .public)]")
+    }
+}
+
 private struct DesktopShell: View {
     let session: DesktopSession
     let device: Device?
@@ -38,11 +55,14 @@ private struct DesktopShell: View {
     @State private var panelAnchors: [StatusPanel: CGRect] = [:]
     @State private var keyMonitor = DesktopKeyMonitor()
     @State private var desktopWindow: NSWindow?
+    /// 창 아래 끝이 맥 독 영역까지 내려가 있을 때 그만큼 데스크톱을 위로 줄인다(WindowDockOverlap).
+    @State private var dockOverlap: CGFloat = 0
 
     var body: some View {
-        VStack(spacing: 0) {
-            StatusBar(session: session, device: device, activePanel: $activePanel)
-            GeometryReader { geometry in
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                StatusBar(session: session, device: device, activePanel: $activePanel)
+                GeometryReader { geometry in
                 ZStack(alignment: .topLeading) {
                     Wallpaper(session: session, selection: $selection, marquee: $marquee,
                               openLauncher: { launcherOpen = true })
@@ -99,23 +119,32 @@ private struct DesktopShell: View {
                         RecentsOverlay(session: session, isOpen: $recentsOpen)
                             .transition(.opacity)
                     }
-                    // 떠 있는 독(가운데)과 내비 버튼(왼쪽) — 앱 서랍 위에도 보이게 맨 위
-                    FloatingDock(session: session, launcherOpen: $launcherOpen, recentsOpen: $recentsOpen)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                        .padding(.bottom, 8)
-                        .allowsHitTesting(true)
-                    NavPill(session: session, launcherOpen: $launcherOpen, recentsOpen: $recentsOpen)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                        .padding(.leading, 12)
-                        .padding(.bottom, 14)
                 }
                 .coordinateSpace(name: "canvas")
                 .clipped()
-                .onAppear { session.canvasChanged(geometry.size, backingScale: backingScale) }
+                .onAppear {
+                    session.canvasChanged(geometry.size, backingScale: backingScale)
+                    DesktopShellLayoutLog.report("appear", geometry: geometry.size,
+                                                  phaseDesc: String(describing: session.phase), windows: session.windows.count)
+                }
                 .onChange(of: geometry.size) { _, size in
                     session.canvasChanged(size, backingScale: backingScale)
+                    DesktopShellLayoutLog.report("change", geometry: size,
+                                                  phaseDesc: String(describing: session.phase), windows: session.windows.count)
                 }
             }
+            }
+            /* 떠 있는 독(가운데)과 내비 버튼(왼쪽) — 캔버스 좌표계가 아니라 창(셸) 하단 기준으로 그린다.
+               변경 전: 캔버스 ZStack 안에 maxWidth/Height ∞ 프레임으로 배치 — 캔버스 크기가 창과 어긋나면
+               독·내비가 창 밖(고정 좌표처럼 보이는 곳)으로 밀려 보이지 않았다(대장님 신고).
+               변경 후: 셸 ZStack(alignment: .bottom)에 두어 창 하단에 무조건 붙는다. */
+            FloatingDock(session: session, launcherOpen: $launcherOpen, recentsOpen: $recentsOpen)
+                .padding(.bottom, 8)
+                .allowsHitTesting(true)
+            NavPill(session: session, launcherOpen: $launcherOpen, recentsOpen: $recentsOpen)
+                .frame(maxWidth: .infinity, alignment: .bottomLeading)
+                .padding(.leading, 12)
+                .padding(.bottom, 14)
         }
         .ignoresSafeArea(.container, edges: .top)   // 상태표시줄을 창 제목줄 자리(신호등 옆)에
         .background(Color.black)
@@ -181,9 +210,89 @@ private struct DesktopShell: View {
         .animation(.spring(response: 0.28, dampingFraction: 0.86), value: openFolder)
         .animation(.spring(response: 0.25, dampingFraction: 0.85), value: session.snapPreview)
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: session.phoneAsleep)
+        // 창 아래 끝이 맥 독에 가려져 있으면 그만큼 위로 줄여 하단 내비·독이 항상 보이게 한다
+        .background(WindowDockOverlap { dockOverlap = $0 })
+        .padding(.bottom, dockOverlap)
+        .background(Color.black)
     }
 
     private var backingScale: CGFloat { NSScreen.main?.backingScaleFactor ?? 2 }
+}
+
+// MARK: - 맥 독에 가려지는 만큼 비우기
+
+/* 변경 전 정책: 데스크톱 캔버스는 데스크톱 창의 내용 영역 전체를 그대로 썼다 — 창 아래 끝이 화면의 보이는 영역
+     (맥 독 위)보다 아래로 내려가 있으면 하단 내비 버튼·독이 맥 독 뒤로 들어가 보이지 않았다(대장님 신고).
+   변경 후 정책: 창 아래 끝이 맥 독 영역에 걸쳐 있으면 가려지는 높이만큼 데스크톱(상태표시줄·캔버스·하단 내비·독)을
+     위로 줄인다. 맥 독이 자동 숨김이거나 창이 독 위에 있으면 0이라 평소 레이아웃은 그대로다.
+   변경 이유: macOS 최대화(zoom)는 맥 독을 덮지 못하고, 창을 화면 끝까지 끌거나 창 관리 도구로 채우면 창 아래가
+     맥 독 뒤로 들어간다 — 그 상태에서 하단 UI를 쓸 수 없었다.
+   영향 범위: 데스크톱 창의 레이아웃만. 창 이동·크기·화면 구성·전체 화면 전환 때 다시 잰다. */
+private struct WindowDockOverlap: NSViewRepresentable {
+    /// 레이아웃 진단 로그 — 창/화면/가려진 높이 숫자만 남긴다(Console.app, subsystem=MacDroid).
+    static let log = Logger(subsystem: "kr.macdroid.MacDroid", category: "desktop-layout")
+
+    let onChange: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> Reporter {
+        let view = Reporter()
+        view.onChange = onChange
+        return view
+    }
+
+    func updateNSView(_ view: Reporter, context: Context) {
+        view.onChange = onChange
+        view.report()
+    }
+
+    final class Reporter: NSView {
+        var onChange: ((CGFloat) -> Void)?
+        private var last: CGFloat = -1
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            NotificationCenter.default.removeObserver(self)
+            guard let window else { return }
+            let center = NotificationCenter.default
+            for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification,
+                         NSWindow.didChangeScreenNotification,
+                         NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
+                center.addObserver(self, selector: #selector(remeasure), name: name, object: window)
+            }
+            center.addObserver(self, selector: #selector(remeasure),
+                               name: NSApplication.didChangeScreenParametersNotification, object: nil)
+            report()
+        }
+
+        @objc private func remeasure() {
+            report()
+        }
+
+        /// 창 아래 끝이 맥 독에 가려지는 높이(pt). 독이 없거나(자동 숨김·옆/위 배치) 창이 독 위에 있으면 0.
+        /// - 화면의 보이는 영역 아래 여백 = 독이 차지하는 높이
+        /// - 창 아래 끝이 그 여백에 들어간 만큼만 비운다(창 높이의 40%를 넘겨 비우지는 않는다)
+        func report() {
+            guard let window else { return publish(0, note: "창 없음") }
+            guard !window.styleMask.contains(.fullScreen) else { return publish(0, note: "전체 화면") }
+            guard let screen = window.screen ?? NSScreen.main else { return publish(0, note: "화면 없음") }
+            let visible = screen.visibleFrame
+            let dockBand = visible.minY - screen.frame.minY
+            guard dockBand > 1 else { return publish(0, note: "독 영역 없음 band=\(dockBand)") }
+            let hidden = visible.minY - window.frame.minY
+            let value = min(max(hidden, 0), dockBand, window.frame.height * 0.4)
+            publish(value, note: "window=\(NSStringFromRect(window.frame)) screen=\(NSStringFromRect(screen.frame))"
+                  + " visible=\(NSStringFromRect(visible)) band=\(dockBand) hidden=\(hidden)")
+        }
+
+        private func publish(_ value: CGFloat, note: String = "") {
+            guard abs(value - last) > 0.5 else { return }
+            last = value
+            WindowDockOverlap.log.notice("dock overlap=\(value, privacy: .public) \(note, privacy: .public)")
+            // updateNSView 중에 바로 상태를 바꾸면 SwiftUI 업데이트 도중 상태 변경이 되므로 다음 런루프로 넘긴다
+            let callback = onChange
+            DispatchQueue.main.async { callback?(value) }
+        }
+    }
 }
 
 // MARK: - 상태표시줄
@@ -1534,7 +1643,7 @@ private struct PhoneAsleepBanner: View {
                 .font(.system(size: 16))
             VStack(alignment: .leading, spacing: 2) {
                 Text("폰 화면이 꺼져 있어 데스크톱이 멈춰 있습니다").font(.system(size: 13, weight: .semibold))
-                Text("폰을 켜면 바로 이어서 쓸 수 있어요").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("폰을 켜면 바로 이어서 쓸 수 있어요 · 충전 중이면 폰이 저절로 잠들지 않아요").font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Button("폰 깨우기") { session.wakePhone() }
                 .buttonStyle(.borderedProminent)
@@ -1564,7 +1673,7 @@ private struct IMEHintBanner: View {
                 .font(.system(size: 16))
             VStack(alignment: .leading, spacing: 2) {
                 Text("폰 본체 화면이 켜져 있으면 한글이 입력되지 않아요").font(.system(size: 13, weight: .semibold))
-                Text("본체를 잠그면 데스크톱에서 바로 한글(Shift+Space 한/영)이 됩니다").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("잠가도 맥의 데스크톱 화면은 계속 보입니다 — 폰 본체 화면만 꺼지고, 바로 한글이 돼요(한/영: Shift+Space)").font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Button("본체 잠그기") { session.lockPhoneNow() }
                 .buttonStyle(.borderedProminent)
@@ -1728,6 +1837,7 @@ private struct FloatingDock: View {
             }
         }
         .animation(.spring(response: 0.22, dampingFraction: 0.82), value: mouseX)
+        .onAppear { DesktopShellLayoutLog.log.notice("dock appear items=\(session.dockItems.count, privacy: .public) minimized=\(session.minimized.count, privacy: .public)") }
     }
 
     private var divider: some View {
@@ -1827,6 +1937,7 @@ private struct NavPill: View {
             }
         }
         .padding(4)
+        .onAppear { DesktopShellLayoutLog.log.notice("navpill appear") }
         .background(
             Capsule(style: .continuous)
                 .fill(.ultraThinMaterial)

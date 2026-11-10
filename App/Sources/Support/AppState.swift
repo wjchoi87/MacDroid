@@ -15,6 +15,9 @@ final class AppState {
     private(set) var devices: [Device] = []
     private(set) var sessions: [ScrcpySession] = []
 
+    /// 한번 연결했던 기기 목록 — online 확인 시마다 갱신, 사이드바 '최근 기기'에 표시.
+    private(set) var savedDevices: [SavedDevice] = SavedDeviceStore.load()
+
     var settings: MirrorSettings = MirrorSettings.load() {
         didSet { settings.save() }
     }
@@ -294,8 +297,63 @@ final class AppState {
             if let index = devices.firstIndex(where: { $0.serial == detailed.serial }) {
                 devices[index] = detailed
             }
+            // online으로 확인된 기기는 '최근 기기'로 저장 — 다음 실행부터 원클릭 재연결
+            rememberSavedDevice(detailed)
             detailTasks[detailed.serial] = nil
         }
+    }
+
+    // MARK: 최근 기기(연결했던 기기)
+
+    /// 기기 상세가 확인된 online 기기를 저장 목록에 반영.
+    private func rememberSavedDevice(_ device: Device) {
+        guard device.state == .online else { return }
+        savedDevices = SavedDeviceStore.upsert(device: device)
+    }
+
+    /// 저장 기기가 지금 어떤 전송(USB·ip:port·mDNS)으로든 online인지 — '최근 기기' 목록 필터링용.
+    func isSavedDeviceOnline(_ saved: SavedDevice) -> Bool {
+        let savedIP = saved.lastHost?.split(separator: ":").first.map(String.init)
+        return devices.contains { device in
+            device.state == .online && (
+                device.serial == saved.lastSerial
+                || device.serial == saved.id
+                || device.serialNo == saved.id
+                || (savedIP != nil && device.wirelessIP == savedIP)
+            )
+        }
+    }
+
+    /// 최근 기기 원클릭 재연결.
+    /* 변경 전 정책: 한번 연결했던 폰도 목록에 남지 않아, 다시 연결하려면 '무선 기기 연결' 시트에서
+       IP를 다시 입력하거나 자동 발견을 기다려야 했다(무선 디버깅 포트는 토글마다 바뀌어 재입력이 잦았다).
+       변경 후 정책: 저장해 둔 기기를 눌러 바로 재연결한다 — mDNS 탐색에 같은 기기(serial 일치)가 보이면
+       그 주소(현재 포트)로, 아니면 마지막 ip:port로 connect한다. 무선 주소가 없는 USB 기기면 케이블 안내.
+       변경 이유: "한번 연결했던 기기는 바로 또 연결" — 재스캔/재입력 없이.
+       영향 범위: 사이드바 '최근 기기'의 연결 버튼. 실패 안내는 기존 connect 경로(report)를 그대로 따른다. */
+    func reconnectSavedDevice(_ saved: SavedDevice) {
+        guard !isSavedDeviceOnline(saved) else { return }
+        // mDNS에 같은 기기가 보이면 그 주소로 — 무선 디버깅 포트가 바뀌어도 찾아 준다
+        if let service = discovery.services.first(where: {
+            $0.kind == .connect && ($0.deviceSerial == saved.id || $0.deviceSerial == saved.lastSerial)
+        }) {
+            connect(host: service.address)
+            return
+        }
+        if let host = saved.lastHost {
+            connect(host: host)
+            return
+        }
+        if saved.wasWireless {
+            lastError = String(localized: "\(saved.displayModel)을(를) 찾을 수 없습니다 — 폰의 무선 디버깅이 켜져 있고 맥과 같은 Wi-Fi인지 확인한 뒤 다시 누르세요.")
+        } else {
+            lastError = String(localized: "\(saved.displayModel)은(는) USB로 연결했던 기기입니다 — 케이블을 연결하면 자동으로 나타납니다.")
+        }
+    }
+
+    /// 최근 기기 기록 삭제(사이드바 우클릭).
+    func forgetSavedDevice(_ saved: SavedDevice) {
+        savedDevices = SavedDeviceStore.remove(id: saved.id)
     }
 
     func refreshDevice(_ device: Device) {

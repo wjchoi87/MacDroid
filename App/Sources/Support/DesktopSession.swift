@@ -69,8 +69,12 @@ final class DesktopSession {
     private var stream: DesktopStream?
     private var pollTask: Task<Void, Never>?
     private var lastAwakeCheck = Date.distantPast
-    /// 폰이 잠들어(화면 꺼짐·화면보호기) 데스크톱이 멈춘 상태인지 — 5초마다 확인.
+    /// 폰이 잠들어(Dozing·화면보호기 등) 데스크톱이 실제로 멈춘 상태인지 — 5초마다 확인.
     private(set) var phoneAsleep = false
+    /// 폰 물리 화면이 켜져 있는지(mWakefulness=Awake) — 한글 IME가 본체에 붙어 있는 상태.
+    private(set) var phoneAwake = true
+    /// 사용자가 [본체 잠그기]로 화면을 끈 상태 — 한글 IME가 데스크톱에 붙는 정상 상태다.
+    private var userLockedPhone = false
     private var phoneStateTask: Task<Void, Never>?
     private var notificationTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
@@ -78,6 +82,10 @@ final class DesktopSession {
     private var restoreFrames: [Int: CGRect] = [:]
     /// 기기에 반영 중인 최소화·닫기(그 사이 폴링이 옛 목록으로 되살리지 않게).
     private var hiding: Set<Int> = []
+    /// freeform 창으로 바꿔 본 fullscreen 태스크 id — 재시도 폭주 방지(태스크당 1회).
+    private var windowifiedTasks: Set<Int> = []
+    /// 이전 폴링까지 알던 창 id — 새 태스크가 폰에서 열린 건지 판별용.
+    private var knownWindowIDs: Set<Int> = []
     private var labels: [String: String] = [:]
     private var icons: [String: NSImage] = [:]
 
@@ -317,11 +325,59 @@ final class DesktopSession {
         let parked = Set(minimized.map(\.id))
         let fresh = result.windows.filter { !hiding.contains($0.id) && !parked.contains($0.id) }
         if windows != fresh { windows = fresh }
+        windowifyFullscreenTasks()
         let visible = Set(windows.map(\.package))
         if !launching.isEmpty { launching.subtract(visible) }
         // 닫힌(목록에서 사라진) 최소화 창은 정리
         let alive = Set(result.windows.map(\.id))
         minimized.removeAll { !alive.contains($0.id) && !hiding.contains($0.id) }
+        movePhoneLaunchedTaskToPhone()
+    }
+
+    /// 폰 본체에서 연 앱을 폰 화면으로 돌려보낸다.
+    /* 변경 전 정책: 폰에서 앱 아이콘을 누르면 안드로이드가 데스크톱 디스플레이의 기존 태스크를 그 디스플레이에서
+         맨 앞으로 가져왔다 — 폰 화면은 그대로인데 맥 데스크톱에만 창이 떠 "폰에서 열었는데 왜 맥에?" 혼동(대장님 신고).
+       변경 후 정책: 맥 쪽 입력(독·클릭·실행·windowify)이 최근 3초간 없고 폰 화면이 켜져 있는데, 알지 못하던
+         새 태스크가 데스크톱 맨 앞에 뜨면 = 폰에서 연 것으로 보고 그 태스크를 폰 디스플레이(0)로 옮긴다.
+         창이 닫혀 다음 창이 앞으로 오는 경우는 기존 id라 발동하지 않는다.
+       영향 범위: 데스크톱 세션의 앱 실행 흐름. 폰으로 보낸 앱을 맥에서 다시 열면(focus/open) 데스크톱 창으로 복귀한다. */
+    private func movePhoneLaunchedTaskToPhone() {
+        let currentIDs = Set(windows.map(\.id))
+        defer { knownWindowIDs = currentIDs }
+        guard let front = windows.first,
+              !knownWindowIDs.isEmpty,          // 세션 첫 폴링(기존 창 일괄 등장)에는 반응하지 않는다
+              currentIDs.contains(front.id), !knownWindowIDs.contains(front.id),
+              Date().timeIntervalSince(lastInteraction) > 3,
+              phoneAwake else { return }
+        let serial = self.serial
+        let taskID = front.id
+        Task { _ = try? await ADB.shell(serial: serial, "cmd activity display move-stack \(taskID) 0") }
+    }
+
+    /// fullscreen 태스크를 freeform 창으로 되살린다.
+    /* 변경 전 정책(3d230aa): 폰에서 넘어온 fullscreen 태스크도 '캔버스를 통째로 덮는 창'으로 그렸다 —
+         타이틀줄·하단 내비가 사라진 채 크롬 등이 전체화면으로 떠서 창으로 다룰 수 없었다(대장님 재신고).
+       변경 후 정책: fullscreen 태스크를 발견하면 같은 앱을 --windowingMode 5로 다시 띄워 freeform 창을 만들고,
+         새 태스크가 확인되면 옛 fullscreen 태스크를 stack remove로 정리한다.
+         실측(One UI 8): task resize·resizeable·디스플레이 왕복은 fullscreen을 유지하고, 재실행만 freeform로 만든다.
+       영향 범위: 폰 화면에서 그대로 넘어온 앱·전체화면으로 뜨는 일부 앱. 재시도 폭주 방지로 태스크당 1회만 시도. */
+    private func windowifyFullscreenTasks() {
+        guard let displayId else { return }
+        for window in windows where window.fullscreen && !windowifiedTasks.contains(window.id) {
+            windowifiedTasks.insert(window.id)
+            let serial = self.serial
+            Task {
+                lastInteraction = Date()  // 프로그램 실행(am start) — '폰에서 열렸다' 판정에서 제외
+                _ = try? await ADB.shell(serial: serial,
+                    "am start --display \(displayId) --windowingMode 5 -n \(window.component)")
+                try? await Task.sleep(for: .milliseconds(900))
+                // 새 freeform 태스크가 실제로 생겼을 때만 옛 태스크를 닫는다(앱이 통째로 사라지는 사고 방지)
+                if let recheck = try? await ADB.desktopWindows(serial: serial, displayId: displayId),
+                   recheck.windows.contains(where: { $0.package == window.package && $0.id != window.id }) {
+                    _ = try? await ADB.shell(serial: serial, "cmd activity stack remove \(window.id)")
+                }
+            }
+        }
     }
 
     /// 캔버스 위 앱 내용 영역(pt).
@@ -475,6 +531,7 @@ final class DesktopSession {
     /// 창을 맨 앞으로 — 화면에서 먼저 올리고 기기에도 반영한다.
     func focus(_ window: ADB.DesktopWindow) {
         guard let displayId else { return }
+        markActive()  // 맥에서 앞으로 가져온 것 — '폰에서 열렸다' 판정에서 제외
         raiseLocally(window.id)
         Task { await ADB.focusWindow(serial: serial, displayId: displayId, component: window.component) }
     }
@@ -689,14 +746,35 @@ final class DesktopSession {
         Task { await refreshPhoneState() }
     }
 
+    /* 변경 전 정책: mWakefulness가 Awake가 아니면 무조건 '폰이 잠들어 데스크톱 멈춤'으로 봤다(1차 수정은
+       Asleep/Dozing만 구분). 결함(대장님 재신고): 이 폰은 본체를 잠그면 화면보호기(nightdock)가 떠
+       mWakefulness=Dreaming이 된다 — Dreaming을 멈춤으로 분류해 여전히 모순 배너("잠그세요"↔"멈춰 있음")가 떴다.
+       Dreaming은 시스템이 살아 있어 데스크톱도 한글 IME도 정상 동작한다.
+       변경 후 정책: 실제 멈춤은 ① Dozing(절전)이거나 ② 충전 중이 아닌데 Asleep(시스템 정지 가능)일 때로 본다.
+         Dreaming(화면보호기)·충전 중 Asleep(본체 잠금 — 앱이 올린 stay_on이 시스템을 붙잡음)은 화면만 꺼진 정상 상태.
+       영향 범위: PhoneAsleepBanner 표시 여부, IME 안내 조건(markKeyboardUsed는 phoneAwake 기준). */
     func refreshPhoneState() async {
-        guard let out = try? await ADB.shell(serial: serial, "dumpsys power | grep -m1 mWakefulness=") else { return }
-        let asleep = !out.contains("Awake")
-        if asleep != phoneAsleep { phoneAsleep = asleep }
+        guard let out = try? await ADB.shell(serial: serial,
+            "dumpsys power | grep -m1 mWakefulness=; dumpsys battery | grep -E 'powered:|status:'") else { return }
+        let lines = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let wakeLine = lines.first(where: { $0.contains("mWakefulness=") }) else { return }
+        let awake = wakeLine.contains("Awake")
+        phoneAwake = awake
+        // 사용자가 직접 폰을 깨웠으면 '사용자 잠금' 상태 해제 — 이후 타임아웃 잠듦은 다시 멈춤으로 본다
+        if awake { userLockedPhone = false }
+        let dozing = wakeLine.contains("Dozing")
+        let dreaming = wakeLine.contains("Dreaming")
+        // 충전 중 판정: 유선/무선 powered 또는 status 2(충전)·5(만충전)
+        let charging = lines.contains {
+            $0.hasSuffix("powered: true") || $0.hasSuffix("status: 2") || $0.hasSuffix("status: 5")
+        }
+        let paused = dozing || (!awake && !dreaming && !charging && !userLockedPhone)
+        if paused != phoneAsleep { phoneAsleep = paused }
     }
 
     /// 사용자가 [폰 깨우기]를 눌렀을 때만.
     func wakePhone() {
+        userLockedPhone = false
         Task {
             await ADB.wakeIfAsleep(serial: serial)
             try? await Task.sleep(for: .milliseconds(500))
@@ -715,16 +793,17 @@ final class DesktopSession {
 
     /// 데스크톱 창에서 키보드 입력이 시작됐을 때 — 본체가 깨어 있으면(=한글이 안 되는 상태) 안내를 띄운다.
     func markKeyboardUsed() {
-        if !phoneAsleep { showIMEHint = true }
+        if phoneAwake { showIMEHint = true }
     }
 
     /// 사용자가 [본체 잠그기]를 눌렀을 때만.
     func lockPhoneNow() {
+        userLockedPhone = true
         Task {
             await ADB.sleepIfAwake(serial: serial)
             try? await Task.sleep(for: .milliseconds(600))
             await refreshPhoneState()
-            if phoneAsleep { showIMEHint = false }
+            if !phoneAwake { showIMEHint = false }
         }
     }
 

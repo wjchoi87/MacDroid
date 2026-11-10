@@ -88,6 +88,11 @@ struct DeviceSidebar: View {
     @Binding var selection: String?
     var onPair: () -> Void
 
+    /// 현재 연결되지 않은 '최근 기기' — 연결됐던 기기만 골라 보여준다.
+    private var offlineSavedDevices: [SavedDevice] {
+        appState.savedDevices.filter { !appState.isSavedDeviceOnline($0) }
+    }
+
     var body: some View {
         List(selection: $selection) {
             if appState.devices.isEmpty {
@@ -97,6 +102,21 @@ struct DeviceSidebar: View {
                 ForEach(appState.devices) { device in
                     DeviceRow(device: device)
                         .tag(device.serial)
+                }
+            }
+            // 한번 연결했던 기기 — 재스캔·재입력 없이 바로 재연결
+            if !offlineSavedDevices.isEmpty {
+                Section("최근 기기") {
+                    ForEach(offlineSavedDevices) { saved in
+                        SavedDeviceRow(saved: saved) {
+                            appState.reconnectSavedDevice(saved)
+                        }
+                        .contextMenu {
+                            Button("기록에서 삭제", role: .destructive) {
+                                appState.forgetSavedDevice(saved)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -112,6 +132,38 @@ struct DeviceSidebar: View {
             .buttonStyle(.borderedProminent)
             .padding()
         }
+    }
+}
+
+/// 최근 기기 행 — 마지막 주소(무선) 또는 USB 안내 + 원클릭 연결 버튼.
+struct SavedDeviceRow: View {
+    let saved: SavedDevice
+    var onConnect: () -> Void
+
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: saved.wasWireless ? "wifi" : "cable.connector")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(saved.displayModel)
+                    .lineLimit(1)
+                Text(saved.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if saved.wasWireless {
+                Button("연결", action: onConnect)
+                    .controlSize(.small)
+                    .disabled(appState.busyMessage != nil)
+            }
+        }
+        .padding(.vertical, 2)
+        .help(String(localized: "마지막 연결: \(saved.lastConnectedAt.formatted(.relative(presentation: .named)))\n우클릭으로 기록을 삭제할 수 있습니다"))
     }
 }
 
