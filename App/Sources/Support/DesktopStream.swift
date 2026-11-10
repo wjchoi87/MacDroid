@@ -24,6 +24,8 @@ final class DesktopStream: @unchecked Sendable {
         let density: Int
         let bitRateMbps: Int
         let maxFPS: Int
+        /// 한글 IME용 폰 화면 전원 끄기(scrcpy turn_screen_off) — 시스템은 깨어 있어 가상 디스플레이가 유지된다.
+        let screenOff: Bool
     }
 
     /// 서버가 만든 가상 디스플레이 id(앱 실행 대상).
@@ -127,6 +129,15 @@ final class DesktopStream: @unchecked Sendable {
             // 뜨는 부작용이 있지만 한글 입력이 우선 — 동작 확인 후 정책 재조정.
         ]
         if config.maxFPS > 0 { params.append("max_fps=\(config.maxFPS)") }
+        /* 변경 전 정책: 한글을 위해 폰을 잠글 때 input keyevent KEYCODE_SLEEP를 썼다 — 이 폰(One UI)에서는
+             절전으로 넘어가며 가상 디스플레이까지 검게 꺼져 "폰 화면 끄면 데스크톱도 안 보임"이었다(대장님 신고).
+           변경 후 정책: scrcpy의 turn_screen_off(SurfaceControl 화면 전원만 끄기)+stay_awake로 바꾼다 —
+             시스템은 interactive를 유지해 가상 디스플레이가 계속 렌더링되고, 서버 종료 시 화면은 자동 복구된다.
+           영향 범위: 데스크톱 세션의 scrcpy 서버 인자(설정 on일 때만). */
+        if config.screenOff {
+            params.append("turn_screen_off=true")
+            params.append("stay_awake=true")
+        }
         let command = "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server \(serverVersion) "
             + params.joined(separator: " ")
         let process = StreamingProcess()
