@@ -84,8 +84,8 @@ final class DesktopSession {
     private var hiding: Set<Int> = []
     /// freeform 창으로 바꿔 본 fullscreen 태스크 id — 재시도 폭주 방지(태스크당 1회).
     private var windowifiedTasks: Set<Int> = []
-    /// 이전 폴링까지 알던 창 id — 새 태스크가 폰에서 열린 건지 판별용.
-    private var knownWindowIDs: Set<Int> = []
+    /// 이전 폴링 때 맨 앞이던 창 id — 폰에서 기존 앱을 전면으로 올렸는지 판별용.
+    private var lastFrontWindowID: Int?
     private var labels: [String: String] = [:]
     private var icons: [String: NSImage] = [:]
 
@@ -332,24 +332,28 @@ final class DesktopSession {
         // 닫힌(목록에서 사라진) 최소화 창은 정리
         let alive = Set(result.windows.map(\.id))
         minimized.removeAll { !alive.contains($0.id) && !hiding.contains($0.id) }
-        movePhoneLaunchedTaskToPhone()
+        await movePhoneLaunchedTaskToPhone()
     }
 
     /// 폰 본체에서 연 앱을 폰 화면으로 돌려보낸다.
-    /* 변경 전 정책: 폰에서 앱 아이콘을 누르면 안드로이드가 데스크톱 디스플레이의 기존 태스크를 그 디스플레이에서
-         맨 앞으로 가져왔다 — 폰 화면은 그대로인데 맥 데스크톱에만 창이 떠 "폰에서 열었는데 왜 맥에?" 혼동(대장님 신고).
-       변경 후 정책: 맥 쪽 입력(독·클릭·실행·windowify)이 최근 3초간 없고 폰 화면이 켜져 있는데, 알지 못하던
-         새 태스크가 데스크톱 맨 앞에 뜨면 = 폰에서 연 것으로 보고 그 태스크를 폰 디스플레이(0)로 옮긴다.
-         창이 닫혀 다음 창이 앞으로 오는 경우는 기존 id라 발동하지 않는다.
-       영향 범위: 데스크톱 세션의 앱 실행 흐름. 폰으로 보낸 앱을 맥에서 다시 열면(focus/open) 데스크톱 창으로 복귀한다. */
-    private func movePhoneLaunchedTaskToPhone() {
-        let currentIDs = Set(windows.map(\.id))
-        defer { knownWindowIDs = currentIDs }
-        guard let front = windows.first,
-              !knownWindowIDs.isEmpty,          // 세션 첫 폴링(기존 창 일괄 등장)에는 반응하지 않는다
-              currentIDs.contains(front.id), !knownWindowIDs.contains(front.id),
-              Date().timeIntervalSince(lastInteraction) > 3,
-              phoneAwake else { return }
+    /* 변경 전 정책(1차): '새 태스크 id가 맨 앞에 뜨는 것'만 폰에서 연 것으로 봤다 — 데스크톱에 이미 떠 있던
+         앱을 폰에서 열면 기존 태스크가 그 디스플레이에서 맨 앞으로 올라올 뿐(새 id가 아님)이라 발동하지 않았다.
+       변경 후 정책(2차): '맨 앞 창이 다른 기존 창으로 바뀜(전면 재배치)'을 기준으로 잡는다 —
+         · 맥 쪽 입력(독·클릭·실행·복원)이 최근 3초간 없고(해당 경로는 lastInteraction을 갱신한다)
+         · 폰 화면이 켜져 있고(판정 직전에 다시 읽는다 — 세션 중엔 화면이 꺼져 있어 폰을 켠 직후엔 옛 값일 수 있다)
+         · 이전 맨 앞 창이 목록에 남아 있다(닫힘·최소화로 인한 교체가 아님)
+         세 조건이면 폰에서 연 것으로 보고 맨 앞 태스크를 폰 디스플레이(0)로 옮긴다.
+       영향 범위: 데스크톱 세션의 창 전면 변화 감지. 폰으로 보낸 앱을 맥에서 다시 열면(focus/open) 데스크톱 창으로 복귀한다. */
+    private func movePhoneLaunchedTaskToPhone() async {
+        guard let front = windows.first, let prev = lastFrontWindowID, front.id != prev,
+              windows.contains(where: { $0.id == prev }) else {
+            lastFrontWindowID = windows.first?.id
+            return
+        }
+        lastFrontWindowID = front.id
+        guard Date().timeIntervalSince(lastInteraction) > 3 else { return }
+        if !phoneAwake { await refreshPhoneState() }
+        guard phoneAwake else { return }
         let serial = self.serial
         let taskID = front.id
         Task { _ = try? await ADB.shell(serial: serial, "cmd activity display move-stack \(taskID) 0") }
@@ -509,6 +513,7 @@ final class DesktopSession {
 
     func restore(_ entry: Minimized) {
         guard let displayId else { return }
+        markActive()  // 맥에서 복원한 것 — '폰에서 열렸다' 판정에서 제외
         minimized.removeAll { $0.id == entry.id }
         Task {
             await ADB.restoreWindow(serial: serial, taskId: entry.id, displayId: displayId, frame: entry.frame)
