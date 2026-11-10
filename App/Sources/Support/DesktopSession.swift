@@ -378,9 +378,13 @@ final class DesktopSession {
             }
             guard let found = phoneTask else { continue }
             Self.phoneLog.notice("폰으로 이동 감지: \(task.package, privacy: .public) → 폰 태스크 \(found.id, privacy: .public) 전체화면 재실행")
+            /* 재실행은 반드시 --display 0 + 런처 액티비티로: display 지정이 없으면 새 태스크가 데스크톱
+               디스플레이로 열려 다시 폰으로 이동되는 무한반복이 일어났고(실측: 3회 연속 감지), taskId 줄의
+               액티비티는 비(非)런처라 실행이 거부될 수 있다. */
             _ = try? await ADB.shell(serial: serial, "cmd activity stack remove \(found.id)")
             try? await Task.sleep(for: .milliseconds(600))
-            _ = try? await ADB.shell(serial: serial, "am start --windowingMode 1 -n \(found.component)")
+            _ = try? await ADB.shell(serial: serial,
+                "am start --windowingMode 1 --display 0 -n $(cmd package resolve-activity --brief -c android.intent.category.LAUNCHER \(task.package) | tail -n 1)")
         }
     }
 
@@ -406,15 +410,15 @@ final class DesktopSession {
         Self.phoneLog.notice("전면 교체 감지: \(front.package, privacy: .public) 폰 전체화면 재실행")
         let serial = self.serial
         let taskID = front.id
-        let component = front.component
+        let package = front.package
         Task {
-            /* 이전: move-stack→freeform 창이 그대로 폰에 옮겨졌고, 태스크 제거+재실행도 삼성이 앱별
-               freeform(창모드)을 기억해 '최대화된 창'으로 다시 열렸다(대장님 신고).
-               재실행에 --windowingMode 1(전체화면)을 명시하면 진짜 전체화면으로 열린다(실측:
-               새 태스크 mWindowingMode=fullscreen [0,0][720,1560]). */
+            /* 재실행은 --display 0 + 런처 액티비티 + --windowingMode 1(전체화면)로 — display 지정이 없으면
+               데스크톱 디스플레이로 다시 열리고, windowing 지정이 없으면 삼성의 앱별 freeform 기억 때문에
+               '최대화된 창'으로 열린다(모두 실측). */
             _ = try? await ADB.shell(serial: serial, "cmd activity stack remove \(taskID)")
             try? await Task.sleep(for: .milliseconds(800))
-            _ = try? await ADB.shell(serial: serial, "am start --windowingMode 1 -n \(component)")
+            _ = try? await ADB.shell(serial: serial,
+                "am start --windowingMode 1 --display 0 -n $(cmd package resolve-activity --brief -c android.intent.category.LAUNCHER \(package) | tail -n 1)")
         }
     }
 
