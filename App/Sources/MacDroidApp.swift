@@ -41,18 +41,6 @@ struct MacDroidApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1440, height: 900)
 
-        // DeX 앱 런처 — 기기 시리얼을 값으로 갖는 윈도우(기기별 다중 창)
-        WindowGroup(id: "launcher", for: String.self) { $serial in
-            if let serial {
-                LauncherView(serial: serial)
-                    .environment(appState)
-            } else {
-                ContentUnavailableView("기기 없음", systemImage: "iphone.slash",
-                                       description: Text("연결된 기기를 선택하세요."))
-            }
-        }
-        .defaultSize(width: 1000, height: 660)
-
         Settings {
             SettingsView()
                 .environment(appState)

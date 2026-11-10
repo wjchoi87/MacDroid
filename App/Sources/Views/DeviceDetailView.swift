@@ -135,9 +135,6 @@ struct DeviceDetailView: View {
                 .help("MacDroid 데스크톱을 엽니다 — 앱은 그 안에서 창으로 열리고, 독 고정·바탕화면 아이콘을 쓸 수 있습니다")
             }
             GridRow {
-                ActionButton(title: String(localized: "DeX 앱 런처"), icon: "square.grid.2x2") {
-                    openWindow(id: "launcher", value: device.serial)
-                }
                 if device.isUSB {
                     ActionButton(title: String(localized: "무선으로 전환"), icon: "wifi") {
                         appState.enableWireless(for: device)

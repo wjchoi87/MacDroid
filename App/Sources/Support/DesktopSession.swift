@@ -356,7 +356,16 @@ final class DesktopSession {
         guard phoneAwake else { return }
         let serial = self.serial
         let taskID = front.id
-        Task { _ = try? await ADB.shell(serial: serial, "cmd activity display move-stack \(taskID) 0") }
+        let component = front.component
+        Task {
+            /* 이전: move-stack으로 그대로 옮겼더니 freeform 창이 폰에 '창모드'로 떴다(대장님 신고).
+               폰에서는 태스크를 닫고 일반 재실행해야 기본 전체화면으로 열린다(실측: 새 태스크가
+               [0,0][720,1560] fullscreen으로 생성). move-stack·resize·windowingMode 지정은 모두
+               freeform을 유지했다. */
+            _ = try? await ADB.shell(serial: serial, "cmd activity stack remove \(taskID)")
+            try? await Task.sleep(for: .milliseconds(800))
+            _ = try? await ADB.shell(serial: serial, "am start -n \(component)")
+        }
     }
 
     /// fullscreen 태스크를 freeform 창으로 되살린다.
