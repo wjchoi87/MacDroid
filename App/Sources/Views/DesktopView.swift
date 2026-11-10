@@ -26,22 +26,6 @@ struct DesktopView: View {
     }
 }
 
-// MARK: - 데스크톱 셸 레이아웃 진단(일시적 — 독/내비 미표시 원인 추적용)
-/* 임시 진단 로그: 캔버스 크기·창 좌표·화면 visibleFrame·세션 상태를 Console.app(subsystem=MacDroid)에 남긴다.
-   원인 파악 후 제거 예정. */
-enum DesktopShellLayoutLog {
-    static let log = Logger(subsystem: "kr.macdroid.MacDroid", category: "shell-layout")
-
-    static func report(_ tag: String, geometry: CGSize, phaseDesc: String, windows: Int) {
-        let frame = NSApp.windows.map { "\(Int($0.frame.width))x\(Int($0.frame.height))@\(Int($0.frame.minX)),\(Int($0.frame.minY))" }
-            .joined(separator: " | ")
-        let screens = NSScreen.screens.map {
-            "frame=\(Int($0.frame.minY)),\(Int($0.frame.height)) visible=\(Int($0.visibleFrame.minY))~\(Int($0.visibleFrame.maxY))"
-        }.joined(separator: " ; ")
-        log.notice("shell-\(tag, privacy: .public) canvas=\(Int(geometry.width), privacy: .public)x\(Int(geometry.height), privacy: .public) phase=\(phaseDesc, privacy: .public) windows=\(windows, privacy: .public) appWindows=[\(frame, privacy: .public)] screens[\(screens, privacy: .public)]")
-    }
-}
-
 private struct DesktopShell: View {
     let session: DesktopSession
     let device: Device?
@@ -122,15 +106,9 @@ private struct DesktopShell: View {
                 }
                 .coordinateSpace(name: "canvas")
                 .clipped()
-                .onAppear {
-                    session.canvasChanged(geometry.size, backingScale: backingScale)
-                    DesktopShellLayoutLog.report("appear", geometry: geometry.size,
-                                                  phaseDesc: String(describing: session.phase), windows: session.windows.count)
-                }
+                .onAppear { session.canvasChanged(geometry.size, backingScale: backingScale) }
                 .onChange(of: geometry.size) { _, size in
                     session.canvasChanged(size, backingScale: backingScale)
-                    DesktopShellLayoutLog.report("change", geometry: size,
-                                                  phaseDesc: String(describing: session.phase), windows: session.windows.count)
                 }
             }
             }
@@ -1837,7 +1815,6 @@ private struct FloatingDock: View {
             }
         }
         .animation(.spring(response: 0.22, dampingFraction: 0.82), value: mouseX)
-        .onAppear { DesktopShellLayoutLog.log.notice("dock appear items=\(session.dockItems.count, privacy: .public) minimized=\(session.minimized.count, privacy: .public)") }
     }
 
     private var divider: some View {
@@ -1937,7 +1914,6 @@ private struct NavPill: View {
             }
         }
         .padding(4)
-        .onAppear { DesktopShellLayoutLog.log.notice("navpill appear") }
         .background(
             Capsule(style: .continuous)
                 .fill(.ultraThinMaterial)
