@@ -756,13 +756,16 @@ final class DesktopSession {
        영향 범위: PhoneAsleepBanner 표시 여부, IME 안내 조건(markKeyboardUsed는 phoneAwake 기준). */
     func refreshPhoneState() async {
         guard let out = try? await ADB.shell(serial: serial,
-            "dumpsys power | grep -m1 mWakefulness=; dumpsys battery | grep -E 'powered:|status:'") else { return }
+            "dumpsys power | grep -m1 mWakefulness=; dumpsys display | grep -m1 'Display State='; dumpsys battery | grep -E 'powered:|status:'") else { return }
         let lines = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         guard let wakeLine = lines.first(where: { $0.contains("mWakefulness=") }) else { return }
         let awake = wakeLine.contains("Awake")
-        phoneAwake = awake
-        // 사용자가 직접 폰을 깨웠으면 '사용자 잠금' 상태 해제 — 이후 타임아웃 잠듦은 다시 멈춤으로 본다
-        if awake { userLockedPhone = false }
+        // 화면 전원 상태(scrcpy turn_screen_off/setDisplayPower로 꺼도 mWakefulness는 Awake로 유지된다) —
+        // 실제로 화면이 켜져 있을 때만 IME가 본체에 붙은 상태로 본다
+        let screenOn = lines.first(where: { $0.contains("Display State=") })?.hasSuffix("=ON") ?? true
+        phoneAwake = awake && screenOn
+        // 사용자가 직접 폰을 켰으면 '사용자 잠금' 상태 해제 — 이후 타임아웃 잠듦은 다시 멈춤으로 본다
+        if phoneAwake { userLockedPhone = false }
         let dozing = wakeLine.contains("Dozing")
         let dreaming = wakeLine.contains("Dreaming")
         // 충전 중 판정: 유선/무선 powered 또는 status 2(충전)·5(만충전)
@@ -776,8 +779,9 @@ final class DesktopSession {
     /// 사용자가 [폰 깨우기]를 눌렀을 때만.
     func wakePhone() {
         userLockedPhone = false
+        stream?.setDisplayPower(true)
         Task {
-            await ADB.wakeIfAsleep(serial: serial)
+            await ADB.wakeIfAsleep(serial: serial)  // 실제로 잠들어 있던 경우(비충전 절전)도 깨운다
             try? await Task.sleep(for: .milliseconds(500))
             await refreshPhoneState()
         }
@@ -797,11 +801,16 @@ final class DesktopSession {
         if phoneAwake { showIMEHint = true }
     }
 
-    /// 사용자가 [본체 잠그기]를 눌렀을 때만.
+    /// 사용자가 [본체 잠그기]를 눌렀을 때만 — 화면 '전원'을 끈다(절전 아님).
+    /* 변경 전 정책: input keyevent KEYCODE_SLEEP로 절전시켰다 — 이 폰(One UI)에서는 가상 디스플레이(데스크톱
+         화면)까지 검게 꺼져 "잠그면 데스크톱이 안 보인다"였다(대장님 신고).
+       변경 후 정책: scrcpy control 메시지(TYPE_SET_DISPLAY_POWER)로 폰 화면 전원만 끈다 — 시스템은 깨어
+         있어 데스크톱 화면은 계속 표시된다. 세션 시작 자동 꺼기는 서버 turn_screen_off가 담당한다.
+       영향 범위: DeX 데스크톱의 [본체 잠그기] 버튼. */
     func lockPhoneNow() {
         userLockedPhone = true
+        stream?.setDisplayPower(false)
         Task {
-            await ADB.sleepIfAwake(serial: serial)
             try? await Task.sleep(for: .milliseconds(600))
             await refreshPhoneState()
             if !phoneAwake { showIMEHint = false }

@@ -352,6 +352,15 @@ final class DesktopStream: @unchecked Sendable {
         send(msg)
     }
 
+    /// 폰 본체 화면 전원 제어(scrcpy TYPE_SET_DISPLAY_POWER=10, payload 1바이트 0/1).
+    /* 절전(KEYCODE_SLEEP) 대신 쓴다 — 이 폰(One UI)은 절전으로 넘어가면 가상 디스플레이까지 끄지만,
+       화면 '전원 오프'는 시스템이 깨어 있어 데스크톱 화면이 유지된다(실측). */
+    func setDisplayPower(_ on: Bool) {
+        var msg: [UInt8] = [10]
+        msg.append(on ? 1 : 0)
+        send(msg)
+    }
+
     // MARK: uhid 물리 키보드
 
     /* 변경 전 정책(한글 입력): 글자를 macOS IME로 확정해 클립보드+붙여넣기(주입 Ctrl+V/KEYCODE_PASTE)로 넣었다.
