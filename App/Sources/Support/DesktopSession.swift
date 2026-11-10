@@ -75,6 +75,8 @@ final class DesktopSession {
     private(set) var phoneAwake = true
     /// 사용자가 [본체 잠그기]로 화면을 끈 상태 — 한글 IME가 데스크톱에 붙는 정상 상태다.
     private var userLockedPhone = false
+    /// 데스크톱 세션을 위해 앱이 자동으로 폰 화면을 끈 상태 — 세션 종료 시 다시 켠다.
+    private var autoLockedForIME = false
     private var phoneStateTask: Task<Void, Never>?
     private var notificationTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
@@ -248,6 +250,33 @@ final class DesktopSession {
         displayId = nil
         windows = []
         minimized = []
+        wakeIfAutoLockedForIME()
+    }
+
+    /// 데스크톱 시작 시 한글 IME가 데스크톱 디스플레이에 붙도록 폰 화면을 자동으로 끈다.
+    /* 변경 전 정책: 폰 화면이 켜져 있으면 한글이 조합되지 않아, 사용자가 배너의 [본체 잠그기]를
+         직접 눌러야만 했다 — "한글 치려고 매번 폰을 잠그는 게 너무 불편하다"(대장님 신고).
+       변경 후 정책: 설정이 켜져 있으면(기본 on) 데스크톱 세션이 시작될 때 폰 화면을 자동으로 끈다.
+         안드로이드 IME는 한 번에 한 디스플레이만 담당해서 폰 화면이 켜져 있으면 데스크톱에서 한글이
+         안 되는 것은 프레임워크 제약 — 자동화로 수동 잠금 단계를 없앤다. 세션 종료 시엔 다시 켠다.
+       영향 범위: 데스크톱 세션 시작/종료. 사용자가 세션 중 직접 폰을 깨워 쓰다가 종료하면 켜지는
+         정도의 부작용만 있다(깨진 상태에서는 아무 일도 안 함). */
+    private func autoLockForIMEIfNeeded() {
+        guard appState?.settings.autoLockForIME ?? true else { return }
+        autoLockedForIME = true
+        userLockedPhone = true
+        Task {
+            await ADB.sleepIfAwake(serial: serial)
+            await refreshPhoneState()
+        }
+    }
+
+    /// 세션 종료 시 자동으로 껐던 폰 화면을 다시 켠다(사용자가 직접 잠근 상태는 건드리지 않는다).
+    private func wakeIfAutoLockedForIME() {
+        guard autoLockedForIME else { return }
+        autoLockedForIME = false
+        userLockedPhone = false
+        Task { _ = await ADB.wakeIfAsleep(serial: serial) }
     }
 
     private func displayReady(_ id: Int) {
@@ -256,6 +285,7 @@ final class DesktopSession {
         startPolling()
         // 폰 전원·화면은 건드리지 않는다(아래 '폰 상태' 정책). 예전 버전이 남긴 wakelock만 정리한다.
         Task { [serial] in await ADB.releaseStaleDesktopWakelocks(serial: serial) }
+        autoLockForIMEIfNeeded()
         phoneStateTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshPhoneState()

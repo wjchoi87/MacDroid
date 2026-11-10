@@ -102,6 +102,13 @@ struct SettingsView: View {
                     Text("고급 입력을 켜면 폰에 가상 키보드/마우스가 연결되어 호버·게임 키·한글 IME가 물리키보드처럼 동작합니다. 일부 앱에서 문제가 있으면 끄세요.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Toggle("한글 입력 위해 폰 화면 자동으로 끄기", isOn: Binding(
+                        get: { state.settings.autoLockForIME ?? true },
+                        set: { state.settings.autoLockForIME = $0 }
+                    ))
+                    Text("안드로이드 키보드는 한 화면만 담당해서 폰 화면이 켜져 있으면 데스크톱에서 한글이 조합되지 않습니다. 데스크톱을 여는 동안 폰 화면을 자동으로 끄고, 닫으면 다시 켭니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)

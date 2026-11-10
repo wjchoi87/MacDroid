@@ -253,6 +253,8 @@ struct MirrorSettings: Codable, Equatable, Sendable {
     var turnScreenOff: Bool = false
     var showTouches: Bool = false
     var advancedInput: Bool = true    // uhid 키보드/마우스(호버·물리키보드 경험)
+    /// 한글 IME용 폰 화면 자동 끄기 — Optional은 예전 저장값에 키가 없어도 설정이 초기화되지 않게 하려는 것.
+    var autoLockForIME: Bool? = true
     var virtualDisplay: VirtualDisplay = .init(width: 1920, height: 1080, density: 240)
 
     var isCustomVideo: Bool {
