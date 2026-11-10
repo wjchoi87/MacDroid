@@ -107,9 +107,11 @@ enum Scrcpy {
         if settings.turnScreenOff { args += ["--turn-screen-off"] }
         /* 마우스 버벅임 수정(대장님 신고): uhid 마우스는 포인터를 폰이 그려 영상으로 돌아오므로
            인코딩 지연만큼 커서가 늦게 따라온다. 미러(물리 화면)는 절대좌표 터치 주입(sdk)으로
-           바꿔 맥 커서가 즉시 움직이게 한다. 키보드는 한글 조합을 위해 uhid를 유지. */
+           바꾸고 호버도 끈다(--no-mouse-hover) — 폰 쪽 포인터가 아예 그려지지 않아 맥 커서만
+           즉시 움직인다. 키보드는 한글 조합을 위해 uhid를 유지. */
         if let mouse = args.firstIndex(of: "--mouse"), mouse + 1 < args.count {
             args[mouse + 1] = "sdk"
+            args += ["--no-mouse-hover"]
         }
         return args
     }

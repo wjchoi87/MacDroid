@@ -358,13 +358,13 @@ final class DesktopSession {
         let taskID = front.id
         let component = front.component
         Task {
-            /* 이전: move-stack으로 그대로 옮겼더니 freeform 창이 폰에 '창모드'로 떴다(대장님 신고).
-               폰에서는 태스크를 닫고 일반 재실행해야 기본 전체화면으로 열린다(실측: 새 태스크가
-               [0,0][720,1560] fullscreen으로 생성). move-stack·resize·windowingMode 지정은 모두
-               freeform을 유지했다. */
+            /* 이전: move-stack→freeform 창이 그대로 폰에 옮겨졌고, 태스크 제거+재실행도 삼성이 앱별
+               freeform(창모드)을 기억해 '최대화된 창'으로 다시 열렸다(대장님 신고).
+               재실행에 --windowingMode 1(전체화면)을 명시하면 진짜 전체화면으로 열린다(실측:
+               새 태스크 mWindowingMode=fullscreen [0,0][720,1560]). */
             _ = try? await ADB.shell(serial: serial, "cmd activity stack remove \(taskID)")
             try? await Task.sleep(for: .milliseconds(800))
-            _ = try? await ADB.shell(serial: serial, "am start -n \(component)")
+            _ = try? await ADB.shell(serial: serial, "am start --windowingMode 1 -n \(component)")
         }
     }
 
