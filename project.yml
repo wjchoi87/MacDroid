@@ -9,14 +9,17 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    # 자체 서명 인증서(MacDroid Development) — Apple Developer 등록 불필요.
-    # 로컬 네트워크 TCC 권한이 빌드 사이에 유지된다(ad-hoc은 아이덴티티가 매번 바뀜).
+    # 변경 전: 자체 서명(MacDroid Development) + Hardened Runtime OFF — Gatekeeper 경고 우회용.
+    # 변경 후: Developer ID Application(4N5S7KDZ56) + Hardened Runtime ON — Apple 공증(notarytool) 필수 조건.
+    # 이유: 대장님 요청으로 배포 빌드를 공증 가능한 정식 서명으로 전환.
+    # 영향: MacDroid/macdroid 모두 재빌드 시 적용. 로컬 네트워크 TCC 권한은 Team ID 기반으로 유지된다.
     CODE_SIGN_STYLE: Manual
-    CODE_SIGN_IDENTITY: "MacDroid Development"
+    CODE_SIGN_IDENTITY: "Developer ID Application"
+    DEVELOPMENT_TEAM: 4N5S7KDZ56
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
-    ENABLE_HARDENED_RUNTIME: "NO"
+    ENABLE_HARDENED_RUNTIME: "YES"
     DEAD_CODE_STRIPPING: "YES"
     SWIFT_EMIT_LOC_STRINGS: "YES"
     LOCALIZATION_PREFERS_STRING_CATALOGS: "YES"

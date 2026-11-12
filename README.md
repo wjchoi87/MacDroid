@@ -24,8 +24,13 @@ Built on [scrcpy](https://github.com/Genymobile/scrcpy) (Apache-2.0) for the str
 
 1. Download `MacDroid-<version>-macos-arm64.zip` from [Releases](https://github.com/wjchoi87/MacDroid/releases/latest) (Apple Silicon, macOS 14+)
 2. Unzip and move **MacDroid.app** to **Applications**
-3. First launch: MacDroid isn't notarized by Apple yet, so right-click MacDroid.app → **Open** → **Open** (or System Settings → Privacy & Security → **Open Anyway**). You only need to do this once
-4. Allow **Local Network** access when asked (needed for Wi-Fi devices)
+3. First launch: the app is notarized by Apple and opens with a normal double-click — just allow **Local Network** access when asked (needed for Wi-Fi devices)
+
+Or install with Homebrew — the app lands in **Applications** automatically:
+
+```sh
+brew install --cask wjchoi87/tap/macdroid
+```
 
 adb and scrcpy are bundled — nothing else to install. The optional CLI (`macdroid-cli-<version>-macos-arm64.zip`) uses the tools inside `/Applications/MacDroid.app`.
 
